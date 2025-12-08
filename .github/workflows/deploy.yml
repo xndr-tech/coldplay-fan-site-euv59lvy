@@ -1,0 +1,133 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Check for placeholder text
+        run: |
+          echo "=== Checking for placeholder text ==="
+          HTML_FILE="public/index.html"
+          FAILED=0
+          
+          # Check for template variables
+          if grep -E '\{\{[^}]+\}\}' "$HTML_FILE"; then
+            echo "::error::Found template variables {{...}}"
+            FAILED=1
+          fi
+          
+          # Check for Lorem ipsum
+          if grep -i 'lorem ipsum' "$HTML_FILE"; then
+            echo "::error::Found 'Lorem ipsum' placeholder text"
+            FAILED=1
+          fi
+          
+          # Check for TODO/FIXME
+          if grep -iE 'TODO:|FIXME:|PLACEHOLDER' "$HTML_FILE"; then
+            echo "::error::Found TODO/FIXME/PLACEHOLDER comments"
+            FAILED=1
+          fi
+          
+          # Check for "coming soon" type placeholders
+          if grep -iE 'coming soon|under construction|TBD|content goes here' "$HTML_FILE"; then
+            echo "::error::Found placeholder phrases"
+            FAILED=1
+          fi
+          
+          # Check for "Your X here" patterns
+          if grep -iE 'your .{1,20} here|add .{1,20} here' "$HTML_FILE"; then
+            echo "::error::Found 'Your X here' placeholder patterns"
+            FAILED=1
+          fi
+          
+          if [ "$FAILED" -eq 1 ]; then
+            exit 1
+          fi
+          echo "✓ No placeholder text found"
+      
+      - name: Validate HTML structure
+        run: |
+          echo "=== Validating HTML structure ==="
+          HTML_FILE="public/index.html"
+          FAILED=0
+          
+          # Check DOCTYPE
+          if ! head -1 "$HTML_FILE" | grep -qi '<!doctype html>'; then
+            echo "::error::Missing or incorrect DOCTYPE"
+            FAILED=1
+          fi
+          
+          # Check for required meta tags
+          if ! grep -q '<title>' "$HTML_FILE"; then
+            echo "::error::Missing <title> tag"
+            FAILED=1
+          fi
+          
+          if ! grep -q 'name="description"' "$HTML_FILE"; then
+            echo "::error::Missing meta description"
+            FAILED=1
+          fi
+          
+          if ! grep -q 'name="viewport"' "$HTML_FILE"; then
+            echo "::error::Missing viewport meta tag"
+            FAILED=1
+          fi
+          
+          # Check body has content (more than 500 chars between body tags)
+          BODY_SIZE=$(sed -n '/<body/,/<\/body>/p' "$HTML_FILE" | wc -c)
+          if [ "$BODY_SIZE" -lt 1000 ]; then
+            echo "::error::Body content too short ($BODY_SIZE chars) - page appears incomplete"
+            FAILED=1
+          fi
+          
+          # Check for required sections
+          if ! grep -q 'id="hero"\|id='"'"'hero'"'"'' "$HTML_FILE"; then
+            echo "::warning::Missing hero section with id='hero'"
+          fi
+          
+          if ! grep -q 'id="features"\|id='"'"'features'"'"'' "$HTML_FILE"; then
+            echo "::warning::Missing features section with id='features'"
+          fi
+          
+          if ! grep -q 'id="contact"\|id='"'"'contact'"'"'' "$HTML_FILE"; then
+            echo "::warning::Missing contact section with id='contact'"
+          fi
+          
+          if ! grep -q '<footer' "$HTML_FILE"; then
+            echo "::warning::Missing footer element"
+          fi
+          
+          if [ "$FAILED" -eq 1 ]; then
+            exit 1
+          fi
+          echo "✓ HTML structure validated"
+      
+      - name: Check for excessive comments
+        run: |
+          echo "=== Checking comments ==="
+          COMMENT_COUNT=$(grep -c '<!--' public/index.html || echo "0")
+          if [ "$COMMENT_COUNT" -gt 15 ]; then
+            echo "::warning::Found $COMMENT_COUNT HTML comments - AI may have left instructions"
+          fi
+          echo "✓ Comment check passed ($COMMENT_COUNT comments)"
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
